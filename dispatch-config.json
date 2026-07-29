@@ -1,0 +1,11 @@
+{
+  "default_target": "oc_xxxx_notification",
+  "cdp_targets": {
+    "9221": "oc_xxxx_notification",
+    "9222": "oc_xxxx_main",
+    "9223": "oc_xxxx_demand",
+    "9224": "oc_xxxx_code_1",
+    "9225": "oc_xxxx_code_2",
+    "9226": "oc_xxxx_code_3"
+  }
+}

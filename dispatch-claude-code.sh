@@ -99,17 +99,23 @@ if [ -z "$PROMPT" ]; then
     exit 1
 fi
 
+# Locate the config before resolving runtime defaults. An explicit --cdp or
+# CDP_PORT always wins; otherwise use the configured default browser.
+if [ -z "$DISPATCH_CONFIG" ]; then
+    for candidate in "$SCRIPT_DIR/dispatch-config.json" "$SCRIPT_DIR/../dispatch-config.json" "/root/.openclaw/skills/coding-agent/scripts/dispatch-config.json"; do
+        if [ -f "$candidate" ]; then DISPATCH_CONFIG="$candidate"; break; fi
+    done
+fi
+if [ -z "$CDP_PORT" ] && [ -n "$DISPATCH_CONFIG" ] && [ -f "$DISPATCH_CONFIG" ]; then
+    CDP_PORT="$(jq -r '.default_cdp // empty' "$DISPATCH_CONFIG")"
+fi
+
 if [ -n "$CDP_PORT" ] && ! [[ "$CDP_PORT" =~ ^[0-9]+$ ]]; then
     echo "Error: --cdp must be a numeric port" >&2
     exit 1
 fi
 
 if [ -z "$FEISHU_TARGET" ]; then
-    if [ -z "$DISPATCH_CONFIG" ]; then
-        for candidate in "$SCRIPT_DIR/dispatch-config.json" "$SCRIPT_DIR/../dispatch-config.json" "/root/.openclaw/skills/coding-agent/scripts/dispatch-config.json"; do
-            if [ -f "$candidate" ]; then DISPATCH_CONFIG="$candidate"; break; fi
-        done
-    fi
     if [ -n "$DISPATCH_CONFIG" ] && [ -f "$DISPATCH_CONFIG" ] && [ -n "$CDP_PORT" ]; then
         FEISHU_TARGET="$(jq -r --arg cdp "$CDP_PORT" '.cdp_targets[$cdp] // empty' "$DISPATCH_CONFIG")"
     fi

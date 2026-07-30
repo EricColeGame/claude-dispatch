@@ -225,7 +225,7 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
     cwd = args.cwd or os.getcwd()
 
     # If continuing and session exists, skip session creation
-    session_ttl = int(os.environ.get("SESSION_TTL", "86400"))  # default 24 hours
+    session_ttl = int(os.environ.get("SESSION_TTL", "43200"))  # default 12 hours
     if args.continue_latest and session_exists:
         print(f"Continuing existing tmux session: {session}")
     else:

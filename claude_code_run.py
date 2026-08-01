@@ -271,7 +271,7 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
     # Use tmux set-environment to set at server level (more reliable than send-keys)
     if anthropic_base_url:
         subprocess.check_call(tmux_cmd(socket_path, "set-environment", "-t", session, "ANTHROPIC_BASE_URL", anthropic_base_url))
-        print(f"Set ANTHROPIC_BASE_URL={anthropic_base_url[:30]}...")
+        print("ANTHROPIC_BASE_URL injected into tmux session", flush=True)
     else:
         subprocess.run(
             tmux_cmd(socket_path, "set-environment", "-u", "-t", session, "ANTHROPIC_BASE_URL"),
@@ -291,7 +291,7 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
 
     if anthropic_auth_token:
         subprocess.check_call(tmux_cmd(socket_path, "set-environment", "-t", session, "ANTHROPIC_AUTH_TOKEN", anthropic_auth_token))
-        print(f"Set ANTHROPIC_AUTH_TOKEN={anthropic_auth_token[:20]}...")
+        print("ANTHROPIC_AUTH_TOKEN injected into tmux session", flush=True)
     else:
         # Unset ANTHROPIC_AUTH_TOKEN to avoid auth conflicts
         subprocess.run(

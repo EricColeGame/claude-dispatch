@@ -2,10 +2,17 @@
 # batch-dispatch.sh - 批量串行派发 Claude Code 任务
 #
 # Usage:
-#   batch-dispatch.sh --tasks tasks.json [OPTIONS]
+#   batch-dispatch.sh (--tasks tasks.json | --markdown-dir DIR) [OPTIONS]
 #
-# Options:
-#   --tasks FILE             JSON 文件路径（必需）
+# Task input:
+#   --tasks FILE             JSON 任务文件；与 --markdown-dir 二选一
+#   --markdown-dir DIR       Markdown 任务目录；与 --tasks 二选一
+#   --markdown-pattern GLOB  Markdown 文件匹配规则（默认: part*.md）
+#   --append-prompt TEXT     给每个任务追加同一段 Prompt
+#   --append-prompt-file FILE
+#                            覆盖公共要求文件；Markdown 模式默认读取同目录 common-requirements.md
+#
+# Other options:
 #   -g, --group ID           飞书通知目标
 #   -w, --workdir DIR        工作目录（默认: /root）
 #   --permission-mode MODE   权限模式（默认: acceptEdits）
@@ -121,6 +128,10 @@ reinject_idle_prompt_if_needed() {
 
 # 默认值
 TASKS_FILE=""
+MARKDOWN_DIR=""
+MARKDOWN_PATTERN="part*.md"
+APPEND_PROMPT=""
+APPEND_PROMPT_FILE=""
 FEISHU_TARGET=""
 CDP_PORT=""
 WORKDIR="/root"
@@ -150,10 +161,15 @@ usage() {
 批量串行派发 Claude Code 任务
 
 用法:
-  batch-dispatch.sh --tasks tasks.json [OPTIONS]
+  batch-dispatch.sh (--tasks tasks.json | --markdown-dir DIR) [OPTIONS]
 
 选项:
-  --tasks FILE             JSON 文件路径（必需）
+  --tasks FILE             JSON 任务文件；与 --markdown-dir 二选一
+  --markdown-dir DIR       Markdown 目录；每个 .md 生成一个任务，按文件名自然排序
+  --markdown-pattern GLOB  Markdown 文件名模式（默认: part*.md）
+  --append-prompt TEXT     给每个任务末尾追加同一段 Prompt
+  --append-prompt-file FILE
+                           覆盖公共要求文件；Markdown 模式默认读取同目录 common-requirements.md
   -g, --group, --target ID 飞书通知目标；自动传给每个 Part
   --cdp PORT               浏览器 CDP 端口；自动传给每个 Part
   -w, --workdir DIR        工作目录（默认: /root）
@@ -172,6 +188,8 @@ JSON 格式:
       {"name": "task-2", "prompt": "任务 2 的 prompt"}
     ]
   }
+
+Markdown 文件名去掉 .md 后作为任务名，文件正文作为 Prompt。
 EOF
 }
 
@@ -180,6 +198,10 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tasks) TASKS_FILE="$2"; shift 2;;
+            --markdown-dir) MARKDOWN_DIR="$2"; shift 2;;
+            --markdown-pattern) MARKDOWN_PATTERN="$2"; shift 2;;
+            --append-prompt) APPEND_PROMPT="$2"; shift 2;;
+            --append-prompt-file) APPEND_PROMPT_FILE="$2"; shift 2;;
             -g|--group|--target) FEISHU_TARGET="$2"; shift 2;;
             --cdp) CDP_PORT="$2"; shift 2;;
             -w|--workdir) WORKDIR="$2"; shift 2;;
@@ -195,17 +217,74 @@ parse_args() {
         esac
     done
 
-    # 验证必需参数
-    if [[ -z "$TASKS_FILE" ]]; then
-        echo "错误: 缺少 --tasks 参数" >&2
+    if [[ -n "$TASKS_FILE" && -n "$MARKDOWN_DIR" ]] || [[ -z "$TASKS_FILE" && -z "$MARKDOWN_DIR" ]]; then
+        echo "错误: --tasks 与 --markdown-dir 必须且只能选择一个" >&2
         usage
         exit 1
     fi
 
-    if [[ ! -f "$TASKS_FILE" ]]; then
+    if [[ -n "$TASKS_FILE" && ! -f "$TASKS_FILE" ]]; then
         echo "错误: 任务文件不存在: $TASKS_FILE" >&2
         exit 1
     fi
+    if [[ -n "$MARKDOWN_DIR" && ! -d "$MARKDOWN_DIR" ]]; then
+        echo "错误: Markdown 任务目录不存在: $MARKDOWN_DIR" >&2
+        exit 1
+    fi
+    if [[ -n "$MARKDOWN_DIR" && -z "$APPEND_PROMPT_FILE" && -f "$MARKDOWN_DIR/common-requirements.md" ]]; then
+        APPEND_PROMPT_FILE="$MARKDOWN_DIR/common-requirements.md"
+    fi
+    if [[ -n "$APPEND_PROMPT_FILE" && ! -f "$APPEND_PROMPT_FILE" ]]; then
+        echo "错误: 追加 Prompt 文件不存在: $APPEND_PROMPT_FILE" >&2
+        exit 1
+    fi
+}
+
+load_tasks_json() {
+    local tasks_json=""
+
+    if [[ -n "$TASKS_FILE" ]]; then
+        tasks_json=$(cat "$TASKS_FILE")
+        echo "$tasks_json" | jq -e '.tasks | type == "array"' >/dev/null 2>&1 || {
+            echo "错误: JSON 任务文件必须包含 tasks 数组: $TASKS_FILE" >&2
+            return 1
+        }
+    else
+        tasks_json='{"tasks":[]}'
+        local markdown_file=""
+        while IFS= read -r markdown_file; do
+            local task_name
+            local task_prompt
+            task_name=$(basename "$markdown_file" .md)
+            task_prompt=$(cat "$markdown_file")
+            [[ -n "$task_prompt" ]] || {
+                echo "错误: Markdown 任务为空: $markdown_file" >&2
+                return 1
+            }
+            tasks_json=$(echo "$tasks_json" | jq \
+                --arg name "$task_name" \
+                --arg prompt "$task_prompt" \
+                '.tasks += [{name:$name,prompt:$prompt}]')
+        done < <(find "$MARKDOWN_DIR" -maxdepth 1 -type f -name "$MARKDOWN_PATTERN" -print | sort -V)
+    fi
+
+    local append_text="$APPEND_PROMPT"
+    if [[ -n "$APPEND_PROMPT_FILE" ]]; then
+        local append_file_text
+        append_file_text=$(cat "$APPEND_PROMPT_FILE")
+        if [[ -n "$append_text" && -n "$append_file_text" ]]; then
+            append_text="${append_text}"$'\n\n'"${append_file_text}"
+        elif [[ -n "$append_file_text" ]]; then
+            append_text="$append_file_text"
+        fi
+    fi
+    if [[ -n "$append_text" ]]; then
+        tasks_json=$(echo "$tasks_json" | jq \
+            --arg append "$append_text" \
+            '.tasks |= map(.prompt = ((.prompt // "") + "\n\n" + $append))')
+    fi
+
+    echo "$tasks_json"
 }
 
 # 等待任务完成
@@ -396,7 +475,7 @@ main() {
     parse_args "$@"
 
     echo "🚀 批量串行派发 Claude Code 任务"
-    echo "   任务文件: $TASKS_FILE"
+    echo "   任务输入: ${TASKS_FILE:-$MARKDOWN_DIR}"
     echo "   工作目录: $WORKDIR"
     echo "   飞书通知: ${FEISHU_TARGET:-无}"
     echo "   Tmux 会话: $TMUX_SESSION"
@@ -409,7 +488,8 @@ main() {
     LAST_INDEX=0
 
     # 读取任务列表
-    local tasks_json=$(cat "$TASKS_FILE")
+    local tasks_json
+    tasks_json=$(load_tasks_json)
     TOTAL_TASKS=$(echo "$tasks_json" | jq '.tasks | length' 2>/dev/null || echo 0)
 
     if [ $TOTAL_TASKS -eq 0 ]; then

@@ -252,14 +252,18 @@ Claude Code 运行器。它不是课堂主入口，主要被 `dispatch-claude-co
 
 ## `batch-dispatch.sh`
 
-Claude Code 批量串行派发脚本。它读取一个 `tasks.json`，按顺序把多个任务逐个派给 Claude Code。
+Claude Code 批量串行派发脚本。它可以读取 `tasks.json`，也可以直接读取一个 Markdown 任务目录，然后按顺序把多个任务逐个派给 Claude Code。
 
-必填参数：
+任务输入二选一：
 
-- `--tasks FILE`：必填。批量任务 JSON 文件路径，文件里必须有 `tasks` 数组。
+- `--tasks FILE`：读取包含 `tasks` 数组的 JSON 任务文件。
+- `--markdown-dir DIR`：读取目录中的 Markdown 任务，文件名去掉 `.md` 后作为任务名，正文作为 Prompt。
 
 可选参数：
 
+- `--markdown-pattern GLOB`：Markdown 任务文件匹配规则；默认 `part*.md`，并按文件名自然排序。
+- `--append-prompt TEXT`：在每个任务 Prompt 末尾追加同一段较短要求。
+- `--append-prompt-file FILE`：在每个任务 Prompt 末尾追加指定文件的完整内容。Markdown 模式下，未显式传入时自动读取同目录的 `common-requirements.md`。
 - `-g, --group, --target ID`：可选覆盖通知目标；不传时由每个 Part 的单任务 dispatch 根据配置自动选择。
 - `--cdp PORT`：浏览器 CDP 端口，自动传给每个 Part。
 - `-w, --workdir DIR` / `--workdir DIR`：所有子任务共用的工作目录；默认 `/root`，仅需改到其他目录时传。
@@ -285,7 +289,8 @@ Claude Code 批量串行派发脚本。它读取一个 `tasks.json`，按顺序�
 
 它负责：
 
-- 读取 `--tasks tasks.json`；
+- 读取 `--tasks tasks.json` 或 `--markdown-dir DIR`；
+- 合并 `--append-prompt`、`--append-prompt-file` 或默认的 `common-requirements.md`；
 - 校验任务列表格式；
 - 给每个 part 派一个独立 tmux 会话：`${TMUX_SESSION}-p<序号>`；
 - 调用 `dispatch-claude-code.sh` 派发当前 part；

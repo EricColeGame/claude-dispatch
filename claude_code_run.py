@@ -26,8 +26,6 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_CLAUDE = os.environ.get("CLAUDE_CODE_BIN", "/usr/local/bin/claude")
-
 
 def which(name: str) -> str | None:
     paths = os.environ.get("PATH", "").split(":")
@@ -39,6 +37,15 @@ def which(name: str) -> str | None:
         except OSError:
             pass
     return None
+
+
+# 三层兜底：CLAUDE_CODE_BIN 环境变量 → PATH 里查找 claude → 硬编码 /usr/local/bin/claude
+# 学员机器上 claude 可能装在 /usr/bin/claude 或 nvm 路径下，前两层会自动适配
+DEFAULT_CLAUDE = (
+    os.environ.get("CLAUDE_CODE_BIN")
+    or which("claude")
+    or "/usr/local/bin/claude"
+)
 
 
 def looks_like_slash_commands(prompt: str | None) -> bool:

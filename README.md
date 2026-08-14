@@ -39,6 +39,16 @@ claude --version
 claude
 ```
 
+如果 `command -v claude` 的输出不是 `/usr/local/bin/claude`（例如装在 `/usr/bin/claude` 或 nvm 路径下），需要把 `CLAUDE_CODE_BIN` 写进 `~/.bashrc`，否则派发器会找不到 claude 二进制：
+
+```bash
+# 把 claude 实际路径写进环境变量，永久生效
+echo "export CLAUDE_CODE_BIN=\"$(command -v claude)\"" >> ~/.bashrc
+source ~/.bashrc
+```
+
+> `claude_code_run.py` 内部已经做了三层兜底：先读 `CLAUDE_CODE_BIN` 环境变量，再从 `PATH` 里自动查找 `claude`，最后才回退到 `/usr/local/bin/claude`。多数情况下不设环境变量也能找到；设环境变量是为了**保险**——某些 cron / 非交互 shell 的 `PATH` 不完整，自动查找可能漏掉。
+
 默认不需要 `.env`。不传 `--model` 时，脚本直接使用学生自己 Claude Code 的默认模型配置；只有显式传 `--model` 时，才临时覆盖本次任务模型。
 
 ## 安装位置

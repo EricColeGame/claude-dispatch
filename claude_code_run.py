@@ -126,6 +126,19 @@ def tmux_cmd(socket_path: str, *args: str) -> list[str]:
     return ["tmux", "-S", socket_path, *args]
 
 
+def tmux_pane_is_claude(socket_path: str, target: str) -> bool:
+    """Return true only while the tmux pane foreground process is Claude Code."""
+    try:
+        command = subprocess.check_output(
+            tmux_cmd(socket_path, "display-message", "-p", "-t", target, "#{pane_current_command}"),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return False
+    return Path(command).name == "claude"
+
+
 def tmux_capture(socket_path: str, target: str, lines: int = 200) -> str:
     out = subprocess.check_output(
         tmux_cmd(socket_path, "capture-pane", "-p", "-J", "-t", target, "-S", f"-{lines}"),
@@ -216,7 +229,7 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
     # Keep interactive dispatch sessions visible to the shared Claw Remote
     # backend. Allow an explicit env/CLI override for diagnostics, but default
     # to the global socket directory used by the panel.
-    socket_dir = args.tmux_socket_dir or os.environ.get("CLAWDBOT_TMUX_SOCKET_DIR") or "/root/clawdbot-tmux-sockets"
+    socket_dir = args.tmux_socket_dir or os.environ.get("CLAWDBOT_TMUX_SOCKET_DIR") or "/tmp/clawdbot-tmux-sockets"
     Path(socket_dir).mkdir(parents=True, exist_ok=True)
     socket_path = str(Path(socket_dir) / args.tmux_socket_name)
 
@@ -442,6 +455,13 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
         # before the first paste so the React/Ink input box fully binds focus.
         time.sleep(4.0)
 
+        if not tmux_pane_is_claude(socket_path, target):
+            print(
+                "ERROR: Claude Code exited before prompt injection; refusing to paste the prompt into the shell",
+                file=sys.stderr,
+            )
+            return 1
+
         # Write prompt to a temporary file and use tmux load-buffer + paste-buffer
         # Use -p flag on paste-buffer to suppress bracketed paste escape sequences
         import tempfile
@@ -566,7 +586,7 @@ def main() -> int:
     ap.add_argument("--cwd", help="Working directory to run claude in (defaults to current directory)")
 
     ap.add_argument("--tmux-session", default="cc", help="tmux session name (interactive mode)")
-    ap.add_argument("--tmux-socket-dir", default=None, help="tmux socket dir (defaults to $CLAWDBOT_TMUX_SOCKET_DIR or /root/clawdbot-tmux-sockets)")
+    ap.add_argument("--tmux-socket-dir", default=None, help="tmux socket dir (defaults to $CLAWDBOT_TMUX_SOCKET_DIR or /tmp/clawdbot-tmux-sockets)")
     ap.add_argument("--tmux-socket-name", default="claude-code.sock", help="tmux socket file name")
     ap.add_argument("--interactive-wait-s", type=int, default=0, help="Wait N seconds then print a tmux output snapshot")
     ap.add_argument("--interactive-send-delay-ms", type=int, default=800, help="Delay between sending lines in interactive mode")

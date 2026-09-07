@@ -1,11 +1,10 @@
 {
   "default_cdp": "9222",
-  "default_target": "oc_xxxx_notification",
+  "default_target": "oc_4a8b47ff564008b50228aa8788dab93b",
   "cdp_targets": {
-    "9222": "oc_xxxx_notification",
-    "9223": "oc_xxxx_demand",
-    "9224": "oc_xxxx_code_1",
-    "9225": "oc_xxxx_code_2",
-    "9226": "oc_xxxx_code_3"
+    "9222": "oc_4a8b47ff564008b50228aa8788dab93b",
+    "9223": "oc_56a76f001e603168f0f21132ee3ae4c7",
+    "9224": "oc_c5a913dde5a44bfd3663fc611d9cfa10",
+    "9225": "oc_06e301152f145b019bce799701cbd297"
   }
 }

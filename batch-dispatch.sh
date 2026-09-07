@@ -15,7 +15,7 @@
 # Other options:
 #   -g, --group ID           飞书通知目标
 #   -w, --workdir DIR        工作目录（默认: /root）
-#   --permission-mode MODE   权限模式（默认: acceptEdits）
+#   --permission-mode MODE   权限模式（默认: bypassPermissions）
 #   --tmux-session NAME      tmux 会话名（默认: claude-coding-agent）
 #   --wait-timeout SECONDS   单个任务超时时间（默认: 3600）
 #   --stop-on-error          任务失败时停止（默认: 继续）
@@ -34,7 +34,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH_SCRIPT="$SCRIPT_DIR/dispatch-claude-code.sh"
 TMP_DIR="${SCRIPT_DIR}/tmp"
-RESULT_DIR="/root/clawd/data/claude-code-results"
+RESULT_DIR="/home/ubuntu/clawd/data/claude-code-results"
 TASKS_DIR="${RESULT_DIR}/tasks"  # per-task 状态目录
 
 # 提取任务状态摘要
@@ -81,6 +81,13 @@ reinject_idle_prompt_if_needed() {
     sleep 30
 
     local pane
+    local pane_command
+    pane_command=$(tmux -S "$TMUX_SOCKET" list-panes -t "$session_name" -F '#{pane_current_command}' 2>/dev/null | head -1 || true)
+    if [ "$pane_command" = "bash" ] || [ "$pane_command" = "sh" ] || [ "$pane_command" = "zsh" ]; then
+        echo "   Error: ${session_name} 中 Claude 已退出，当前仅剩 ${pane_command}；禁止向 shell 重注入 Prompt" >&2
+        return 1
+    fi
+
     pane=$(tmux -S "$TMUX_SOCKET" capture-pane -p -J -t "${session_name}:0.0" -S -40 2>/dev/null || true)
     if [ -z "$pane" ]; then
         echo "   兜底: 无法捕获 ${session_name} pane，跳过重注入检测"
@@ -134,8 +141,8 @@ APPEND_PROMPT=""
 APPEND_PROMPT_FILE=""
 FEISHU_TARGET=""
 CDP_PORT=""
-WORKDIR="/root"
-PERMISSION_MODE="acceptEdits"
+WORKDIR="/home/ubuntu"
+PERMISSION_MODE="bypassPermissions"
 TMUX_SESSION="claude-coding-agent"
 WAIT_TIMEOUT=3600
 STOP_ON_ERROR=false
@@ -143,7 +150,7 @@ MODEL=""
 EFFORT="xhigh"  # effort 等级，默认 xhigh（脚本 dispatch 统一 xhigh），透传给 dispatch-claude-code.sh
 # tmux socket：与 dispatch-claude-code.sh 保持一致（支持 CLAWDBOT_TMUX_SOCKET_DIR 覆盖），
 # 供"每个 part 完成后销毁上一个 idle 会话"使用
-TMUX_SOCKET="${CLAWDBOT_TMUX_SOCKET_DIR:-/root/clawdbot-tmux-sockets}/claude-code.sock"
+TMUX_SOCKET="${CLAWDBOT_TMUX_SOCKET_DIR:-/home/ubuntu/clawdbot-tmux-sockets}/claude-code.sock"
 # 起始任务序号（1-based）：从完整任务列表的第 N 个开始跑（跳过前面已完成的 part）。
 # 会话名后缀 -p${index} 直接用 task 在完整列表中的序号(=part号)，attach 时直观对应。
 START_INDEX=1
@@ -173,7 +180,7 @@ usage() {
   -g, --group, --target ID 飞书通知目标；自动传给每个 Part
   --cdp PORT               浏览器 CDP 端口；自动传给每个 Part
   -w, --workdir DIR        工作目录（默认: /root）
-  --permission-mode MODE   权限模式（默认: acceptEdits）
+  --permission-mode MODE   权限模式（默认: bypassPermissions）
   --tmux-session NAME      tmux 会话名（默认: claude-coding-agent）
   --wait-timeout SECONDS   单个任务超时时间（默认: 3600）
   --model MODEL            模型覆盖（如 claude-sonnet-4-6）
@@ -319,6 +326,10 @@ wait_for_task_completion() {
                 else
                     echo "   检测到旧结果（时间戳: $timestamp），继续等待..."
                 fi
+            elif [ "$status" == "failed" ]; then
+                WAIT_RESULT="failed"
+                echo "❌ 任务失败: $task_id"
+                return 1
             elif [ "$status" == "waiting_input" ]; then
                 # 任务等待用户输入，这违反了自动化执行的要求
                 WAIT_RESULT="waiting_input"
@@ -417,11 +428,24 @@ $prompt"
     fi
 
     # 执行 dispatch 并传递环境变量
-    local dispatch_output=$(
+    local dispatch_output
+    if dispatch_output=$(
         FORCE_NEW_SESSION=true \
         env -u CLAUDECODE "$DISPATCH_SCRIPT" "${dispatch_args[@]}" 2>&1
-    )
+    ); then
+        :
+    else
+        echo "$dispatch_output"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 1
+    fi
     echo "$dispatch_output"
+
+    if echo "$dispatch_output" | grep -q "ERROR: Claude Code exited before prompt injection"; then
+        echo "❌ Claude Code 在 Prompt 注入前退出，立即停止当前 Part" >&2
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 1
+    fi
 
     # 从输出中提取 Task ID
     local task_id=$(echo "$dispatch_output" | grep "Task ID:" | sed 's/.*Task ID: //' | tr -d ' ')
@@ -447,7 +471,10 @@ $prompt"
     if [ -z "$part_task_meta" ]; then
         part_task_meta="${RESULT_DIR}/sessions/${part_session}/task-meta.json"
     fi
-    reinject_idle_prompt_if_needed "$part_session" "$part_task_meta" || true
+    if ! reinject_idle_prompt_if_needed "$part_session" "$part_task_meta"; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 1
+    fi
 
     # 等待任务完成（传递任务启动时间）
     if wait_for_task_completion "$task_id" "$WAIT_TIMEOUT" "$task_start_time"; then
@@ -458,6 +485,10 @@ $prompt"
     else
         if [ "$WAIT_RESULT" == "timeout" ]; then
             TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1))
+            if [ "$STOP_ON_ERROR" == "true" ]; then
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+                return 1
+            fi
             LAST_PROMPT="$prompt"      # 超时也保留上下文
             LAST_TASK_ID="$task_id"
             echo "⏭️  超时已记录为非致命，继续后续任务"

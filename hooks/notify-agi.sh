@@ -5,9 +5,9 @@
 
 set -uo pipefail
 
-LOG="/root/clawd/data/claude-code-results/hook.log"
-RESULT_DIR="/root/clawd/data/claude-code-results"
-OPENCLAW_BIN="/usr/bin/openclaw"
+LOG="/home/ubuntu/clawd/data/claude-code-results/hook.log"
+RESULT_DIR="/home/ubuntu/clawd/data/claude-code-results"
+OPENCLAW_BIN="$(command -v openclaw || echo /home/ubuntu/.local/share/pnpm/openclaw)"
 # tmux 模式下，hook 触发后等待一段时间再判定完成状态（默认 30 秒）
 COMPLETION_JUDGE_DELAY_SECONDS="${COMPLETION_JUDGE_DELAY_SECONDS:-30}"
 
@@ -18,7 +18,7 @@ log() { echo "[$(date -Iseconds)] $*" >> "$LOG"; }
 
 # ---- Claw Remote 会话状态更新（不依赖 CODING_AGENT_TASK_ID）----
 if [ -n "${CLAW_REMOTE_TMUX_SESSION:-}" ]; then
-    STATUS_FILE="/root/.openclaw/skills/coding-agent/tmp/session-hook-status.json"
+    STATUS_FILE="/home/ubuntu/.openclaw/skills/coding-agent/tmp/session-hook-status.json"
     if [ -f "$STATUS_FILE" ]; then
         TS="$(date -Iseconds)"
         TS_EPOCH="$(date +%s)"
@@ -86,7 +86,7 @@ check_task_completion() {
 # ---- 辅助函数：定位某 tmux 会话当前 Claude 进程的 transcript jsonl ----
 # tmux 场景下 Stop hook 的 stdin 为空（无 transcript_path），故主动定位：
 # tmux pane_pid → 其下 claude 进程 pid → ~/.claude/sessions/<pid>.json 取 sessionId
-# → find /root/.claude/projects 下同名 <uuid>.jsonl。失败返回空。
+# → find /home/ubuntu/.claude/projects 下同名 <uuid>.jsonl。失败返回空。
 resolve_session_transcript() {
     local tmux_session="$1" tmux_socket="$2"
     { [ -z "$tmux_session" ] || [ -z "$tmux_socket" ]; } && return 0
@@ -95,9 +95,9 @@ resolve_session_transcript() {
     [ -z "$pane_pid" ] && return 0
     claude_pid=$(pgrep -P "$pane_pid" -f claude 2>/dev/null | head -1)
     [ -z "$claude_pid" ] && return 0
-    uuid=$(jq -r '.sessionId // empty' "/root/.claude/sessions/${claude_pid}.json" 2>/dev/null)
+    uuid=$(jq -r '.sessionId // empty' "/home/ubuntu/.claude/sessions/${claude_pid}.json" 2>/dev/null)
     [ -z "$uuid" ] && return 0
-    transcript=$(find /root/.claude/projects -name "${uuid}.jsonl" 2>/dev/null | head -1)
+    transcript=$(find /home/ubuntu/.claude/projects -name "${uuid}.jsonl" 2>/dev/null | head -1)
     [ -n "$transcript" ] && echo "$transcript"
 }
 
@@ -185,7 +185,7 @@ resolve_target_task() {
 
     # 1) 从当前 session 的 tmux environment 读取 CODING_AGENT_SESSION_DIR（兼容新建和 --continue 模式）
     if [ -n "${CODING_AGENT_TMUX_SESSION:-}" ]; then
-        local tmux_sock="/root/clawdbot-tmux-sockets/claude-code.sock"
+        local tmux_sock="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
         local _env_session_dir
         _env_session_dir=$(tmux -S "$tmux_sock" show-environment -t "$CODING_AGENT_TMUX_SESSION" CODING_AGENT_SESSION_DIR 2>/dev/null | sed 's/^CODING_AGENT_SESSION_DIR=//' || true)
         if [ -n "$_env_session_dir" ]; then
@@ -255,7 +255,7 @@ mark_task_uncertain() {
     local task_name="unknown"
     local feishu_target=""
     local tmux_session="$session_name"
-    local tmux_socket="/root/clawdbot-tmux-sockets/claude-code.sock"
+    local tmux_socket="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
 
     ts="$(date -Iseconds)"
 
@@ -263,7 +263,7 @@ mark_task_uncertain() {
         task_name=$(jq -r '.task_name // "unknown"' "$meta_file" 2>/dev/null || echo "unknown")
         feishu_target=$(jq -r '.feishu_target // ""' "$meta_file" 2>/dev/null || echo "")
         tmux_session=$(jq -r '.tmux_session // "'"$session_name"'"' "$meta_file" 2>/dev/null || echo "$session_name")
-        tmux_socket=$(jq -r '.tmux_socket // "/root/clawdbot-tmux-sockets/claude-code.sock"' "$meta_file" 2>/dev/null || echo "/root/clawdbot-tmux-sockets/claude-code.sock")
+        tmux_socket=$(jq -r '.tmux_socket // "/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"' "$meta_file" 2>/dev/null || echo "/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock")
     fi
 
     if [ -f "$task_file" ]; then
@@ -319,7 +319,7 @@ process_task() {
         tmux_session="$session_name"
     fi
     if [ -z "$tmux_socket" ]; then
-        tmux_socket="/root/clawdbot-tmux-sockets/claude-code.sock"
+        tmux_socket="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
     fi
 
     log "Task meta: name=$task_name, target=$feishu_target, mode=$run_mode, tmux=$tmux_session"
@@ -519,7 +519,7 @@ ${summary:0:800}
     local parent_session
     parent_session=$(jq -r '.parent_tmux_session // empty' "$meta_file" 2>/dev/null || echo "")
     if [ -n "$parent_session" ]; then
-        local parent_socket="/root/clawdbot-tmux-sockets/claude-code.sock"
+        local parent_socket="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
         if tmux -S "$parent_socket" has-session -t "$parent_session" 2>/dev/null; then
             local notify_msg="子任务 ${task_name} 已完成，请根据对应 SKILL.md 文档或 prompt 检查任务完成进展，没有问题则请继续执行下一阶段。"
 
@@ -589,11 +589,7 @@ log "Total running tasks found: ${#RUNNING_TASKS[@]}"
         TARGET_TASK_INFO=$(resolve_target_task || true)
 
     if [ -z "$TARGET_TASK_INFO" ]; then
-        log "No unique target task resolved, writing uncertain for running tasks"
-        for task_info in "${RUNNING_TASKS[@]}"; do
-            IFS=':' read -r s_name t_id s_dir <<< "$task_info"
-            mark_task_uncertain "$s_name" "$t_id" "$s_dir" "target_resolution_ambiguous"
-        done
+        log "No unique target task resolved; ignoring callback without changing any task"
         log "=== Hook completed (session-isolated skip) ==="
         exit 0
     fi
@@ -638,7 +634,7 @@ log "Meta: task=$TASK_NAME task_id=$TASK_ID target=$FEISHU_TARGET completed_at=$
 OUTPUT=""
 TASK_OUTPUT="${RESULT_DIR}/task-output.txt"
 IS_TMUX_MODE=false
-TMUX_SOCKET="${META_TMUX_SOCKET:-/root/clawdbot-tmux-sockets/claude-code.sock}"
+TMUX_SOCKET="${META_TMUX_SOCKET:-/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock}"
 TMUX_SESSION="${TMUX_SESSION:-claude-coding-agent}"
 
 # 优先根据元数据判断 tmux 模式

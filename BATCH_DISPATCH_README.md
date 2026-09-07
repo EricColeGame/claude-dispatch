@@ -9,10 +9,10 @@
 ### 基本用法
 
 ```bash
-/root/.openclaw/skills/claude-dispatch/batch-dispatch.sh \
+/home/ubuntu/.openclaw/skills/claude-dispatch/batch-dispatch.sh \
   --tasks tasks.json \
   -g "oc_xxxx_notification" \
-  -w "/root/Documents/dispatch-demo/claude-batch"
+  -w "/home/ubuntu/Documents/dispatch-demo/claude-batch"
 ```
 
 ### 完整参数
@@ -56,7 +56,7 @@ batch-dispatch.sh \
 ## 工作原理
 
 1. **串行执行**：每个任务按顺序执行，前一个任务完成后才开始下一个
-2. **Hook 检测**：通过监听 `/root/clawd/data/claude-code-results/latest.json` 文件来检测任务完成
+2. **Hook 检测**：通过监听 `/home/ubuntu/clawd/data/claude-code-results/latest.json` 文件来检测任务完成
 3. **超时保护**：每个任务有独立的超时时间（默认 600 秒）
 4. **失败处理**：
    - 默认：任务失败后继续执行下一个任务
@@ -75,7 +75,7 @@ batch-dispatch.sh \
 
 ### 示例 1: 基本测试
 
-创建任务文件 `/root/Documents/dispatch-demo/claude-batch/tasks.json`：
+创建任务文件 `/home/ubuntu/Documents/dispatch-demo/claude-batch/tasks.json`：
 
 ```json
 {
@@ -96,17 +96,17 @@ batch-dispatch.sh \
 
 ```bash
 batch-dispatch.sh \
-  --tasks /root/Documents/dispatch-demo/claude-batch/tasks.json \
+  --tasks /home/ubuntu/Documents/dispatch-demo/claude-batch/tasks.json \
   -g "oc_xxxx_notification" \
-  -w "/root/Documents/dispatch-demo/claude-batch"
+  -w "/home/ubuntu/Documents/dispatch-demo/claude-batch"
 ```
 
 验证结果：
 
 ```bash
-ls -lt /root/Documents/dispatch-demo/claude-batch/batch-test-*.txt
-cat /root/Documents/dispatch-demo/claude-batch/batch-test-1.txt
-cat /root/Documents/dispatch-demo/claude-batch/batch-test-2.txt
+ls -lt /home/ubuntu/Documents/dispatch-demo/claude-batch/batch-test-*.txt
+cat /home/ubuntu/Documents/dispatch-demo/claude-batch/batch-test-1.txt
+cat /home/ubuntu/Documents/dispatch-demo/claude-batch/batch-test-2.txt
 ```
 
 ### 示例 2: 代码开发任务
@@ -147,8 +147,8 @@ batch-dispatch.sh \
 
 ```
 🚀 批量串行派发 Claude Code 任务
-   任务文件: /root/Documents/dispatch-demo/claude-batch/tasks.json
-   工作目录: /root/Documents/dispatch-demo/claude-batch
+   任务文件: /home/ubuntu/Documents/dispatch-demo/claude-batch/tasks.json
+   工作目录: /home/ubuntu/Documents/dispatch-demo/claude-batch
    飞书通知: oc_xxxx_notification
    Tmux 会话: claude-coding-agent
 
@@ -193,26 +193,26 @@ batch-dispatch.sh \
 
 如果任务经常超时，可以：
 - 增加 `--wait-timeout` 参数
-- 检查 Hook 是否正常工作：`tail -f /root/clawd/data/claude-code-results/hook.log`
-- 检查 `latest.json` 是否更新：`cat /root/clawd/data/claude-code-results/latest.json`
+- 检查 Hook 是否正常工作：`tail -f /home/ubuntu/clawd/data/claude-code-results/hook.log`
+- 检查 `latest.json` 是否更新：`cat /home/ubuntu/clawd/data/claude-code-results/latest.json`
 
 ### 任务未执行
 
 检查：
-- tmux 会话是否存在：`tmux -S /root/clawdbot-tmux-sockets/claude-code.sock ls`
+- tmux 会话是否存在：`tmux -S /home/ubuntu/clawdbot-tmux-sockets/claude-code.sock ls`
 - Claude Code 是否正常运行：`ps aux | grep claude`
-- 工作目录是否存在：`ls -la /root/Documents/dispatch-demo/claude-batch`
+- 工作目录是否存在：`ls -la /home/ubuntu/Documents/dispatch-demo/claude-batch`
 
 ### Hook 未触发
 
 检查：
-- Hook 日志：`tail -50 /root/clawd/data/claude-code-results/hook.log`
+- Hook 日志：`tail -50 /home/ubuntu/clawd/data/claude-code-results/hook.log`
 - Hook 配置：`cat ~/.claude/hooks.json`
-- 权限问题：`ls -la /root/clawd/data/claude-code-results/`
+- 权限问题：`ls -la /home/ubuntu/clawd/data/claude-code-results/`
 
 ## 相关文件
 
-- 脚本位置：`/root/.openclaw/skills/claude-dispatch/batch-dispatch.sh`
-- 依赖脚本：`/root/.openclaw/skills/claude-dispatch/dispatch-claude-code.sh`
-- Hook 脚本：`/root/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh`
-- 结果目录：`/root/clawd/data/claude-code-results/`
+- 脚本位置：`/home/ubuntu/.openclaw/skills/claude-dispatch/batch-dispatch.sh`
+- 依赖脚本：`/home/ubuntu/.openclaw/skills/claude-dispatch/dispatch-claude-code.sh`
+- Hook 脚本：`/home/ubuntu/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh`
+- 结果目录：`/home/ubuntu/clawd/data/claude-code-results/`

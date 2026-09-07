@@ -56,13 +56,13 @@ source ~/.bashrc
 推荐固定放到 OpenClaw skills 目录下：
 
 ```text
-/root/.openclaw/skills/claude-dispatch
+/home/ubuntu/.openclaw/skills/claude-dispatch
 ```
 
 确认脚本可执行：
 
 ```bash
-cd /root/.openclaw/skills/claude-dispatch
+cd /home/ubuntu/.openclaw/skills/claude-dispatch
 chmod +x *.sh *.py hooks/*.sh
 ```
 
@@ -71,7 +71,7 @@ chmod +x *.sh *.py hooks/*.sh
 首次派发任务前，必须打开当前项目目录里的配置文件：
 
 ```text
-/root/.openclaw/skills/claude-dispatch/dispatch-config.json
+/home/ubuntu/.openclaw/skills/claude-dispatch/dispatch-config.json
 ```
 
 默认内容使用课堂占位值，不能直接照搬。把其中的飞书 `chat_id` 全部替换成学生自己的真实群 ID：
@@ -100,7 +100,7 @@ chmod +x *.sh *.py hooks/*.sh
 检查 JSON 格式：
 
 ```bash
-cd /root/.openclaw/skills/claude-dispatch
+cd /home/ubuntu/.openclaw/skills/claude-dispatch
 jq empty dispatch-config.json
 jq '.default_cdp, .default_target, .cdp_targets' dispatch-config.json
 ```
@@ -127,7 +127,7 @@ jq '.default_cdp, .default_target, .cdp_targets' dispatch-config.json
         "hooks": [
           {
             "type": "command",
-            "command": "/root/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh",
+            "command": "/home/ubuntu/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh",
             "timeout": 300
           }
         ]
@@ -138,7 +138,7 @@ jq '.default_cdp, .default_target, .cdp_targets' dispatch-config.json
         "hooks": [
           {
             "type": "command",
-            "command": "/root/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh",
+            "command": "/home/ubuntu/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh",
             "timeout": 300
           }
         ]
@@ -151,7 +151,7 @@ jq '.default_cdp, .default_target, .cdp_targets' dispatch-config.json
 验证：
 
 ```bash
-test -x /root/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh
+test -x /home/ubuntu/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh
 jq '.hooks' ~/.claude/settings.json
 ```
 
@@ -160,18 +160,18 @@ jq '.hooks' ~/.claude/settings.json
 下面不传 `--target`，用于验证刚才配置的 `default_target` 是否生效。
 
 ```bash
-cd /root/.openclaw/skills/claude-dispatch
+cd /home/ubuntu/.openclaw/skills/claude-dispatch
 
 env -u CLAUDECODE ./dispatch-claude-code.sh \
   --tmux-session demo-claude-readme \
-  --workdir /root/Documents/dispatch-demo/claude \
+  --workdir /home/ubuntu/Documents/dispatch-demo/claude \
   -p "在当前目录创建 README.md，内容写一行 hello from claude dispatch。完成后汇总结果。"
 ```
 
 查看 tmux 现场：
 
 ```bash
-tmux -S /root/clawdbot-tmux-sockets/claude-code.sock \
+tmux -S /home/ubuntu/clawdbot-tmux-sockets/claude-code.sock \
   attach -t demo-claude-readme
 ```
 
@@ -211,7 +211,7 @@ Claude Code 单任务派发入口。课堂里最优先讲这个文件。
 
 - 解析任务、工作目录、模型、权限模式、tmux 会话等参数；
 - 生成 `TASK_ID`；
-- 写入 `/root/clawd/data/claude-code-results/` 下的任务状态文件；
+- 写入 `/home/ubuntu/clawd/data/claude-code-results/` 下的任务状态文件；
 - 给 prompt 追加任务结束要求；
 - 设置 hook 需要的 `CODING_AGENT_*` 环境变量；
 - 调用 `claude_code_run.py` 把 Claude Code 启动进 tmux；
@@ -243,7 +243,7 @@ Claude Code 运行器。它不是课堂主入口，主要被 `dispatch-claude-co
 - `--claude-bin PATH`：Claude CLI 路径；默认读取 `CLAUDE_CODE_BIN`，再回退到 `/usr/local/bin/claude`。
 - `--cwd DIR`：Claude Code 工作目录；默认当前目录。
 - `--tmux-session NAME`：interactive 模式的 tmux 会话名；默认 `cc`。
-- `--tmux-socket-dir DIR`：tmux socket 目录；默认 `/root/clawdbot-tmux-sockets`。
+- `--tmux-socket-dir DIR`：tmux socket 目录；默认 `/home/ubuntu/clawdbot-tmux-sockets`。
 - `--tmux-socket-name NAME`：tmux socket 文件名；默认 `claude-code.sock`。
 - `--interactive-wait-s SECONDS`：interactive 启动后等待 N 秒再打印 tmux 快照。
 - `--interactive-send-delay-ms MS`：逐行发送 prompt 的间隔。
@@ -277,7 +277,7 @@ Claude Code 批量串行派发脚本。它可以读取 `tasks.json`，也可以�
 - `-g, --group, --target ID`：可选覆盖通知目标；不传时由每个 Part 的单任务 dispatch 根据配置自动选择。
 - `--cdp PORT`：浏览器 CDP 端口，自动传给每个 Part。
 - `-w, --workdir DIR` / `--workdir DIR`：所有子任务共用的工作目录；默认 `/root`，仅需改到其他目录时传。
-- `--permission-mode MODE`：传给 Claude dispatch 的权限模式；默认 `acceptEdits`。
+- `--permission-mode MODE`：传给 Claude dispatch 的权限模式；默认 `bypassPermissions`。
 - `--tmux-session NAME`：基础 tmux 会话名前缀；每个 part 会变成 `${NAME}-p<序号>`。
 - `--wait-timeout SECONDS`：单个 part 最长等待时间；默认 `3600` 秒。
 - `--model MODEL`：传给每个 Claude 子任务的模型覆盖值。
@@ -343,17 +343,17 @@ Claude Code 完成通知 hook。它配置在 `~/.claude/settings.json` 的 `Stop
 Claude dispatch 固定使用：
 
 ```text
-/root/clawdbot-tmux-sockets/claude-code.sock
+/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock
 ```
 
 只要 Claw Remote 后端读取同一个 socket，就能看到 Claude 任务现场。
 
 ```bash
-tmux -S /root/clawdbot-tmux-sockets/claude-code.sock list-sessions
+tmux -S /home/ubuntu/clawdbot-tmux-sockets/claude-code.sock list-sessions
 ```
 
 任务状态文件：
 
 ```text
-/root/clawd/data/claude-code-results/
+/home/ubuntu/clawd/data/claude-code-results/
 ```

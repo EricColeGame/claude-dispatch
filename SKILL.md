@@ -39,24 +39,24 @@ allowed-tools: Bash(claude-dispatch:*)
 - `WORKDIR`：仅任务不能在默认 `/root` 下执行时覆盖。
 - `MODEL`：只在用户明确要求临时换模型时传 `--model`。
 - `EFFORT`：默认 `xhigh`；只有用户明确要求时调整。
-- `PERMISSION_MODE`：默认 `acceptEdits`；课堂演示建议使用 `acceptEdits`。
+- `PERMISSION_MODE`：默认 `bypassPermissions`，适用于无人值守的批处理；仅在明确需要人工确认时覆盖。
 
 ## 执行命令
 
-后续 agent 按下面模板构造命令。默认安装路径是 `/root/.openclaw/skills/claude-dispatch`。
+后续 agent 按下面模板构造命令。默认安装路径是 `/home/ubuntu/.openclaw/skills/claude-dispatch`。
 
 ```bash
 #!/bin/bash
 set -euo pipefail
 
-CLAUDE_DISPATCH_ROOT="${CLAUDE_DISPATCH_ROOT:-/root/.openclaw/skills/claude-dispatch}"
+CLAUDE_DISPATCH_ROOT="${CLAUDE_DISPATCH_ROOT:-/home/ubuntu/.openclaw/skills/claude-dispatch}"
 
 USER_TASK="${USER_TASK:?需要提供任务描述}"
 FEISHU_TARGET="${FEISHU_TARGET:-}"
 CDP_PORT="${CDP_PORT:-}"
 TMUX_SESSION="${TMUX_SESSION:?需要提供 tmux 会话名}"
 
-PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
+PERMISSION_MODE="${PERMISSION_MODE:-bypassPermissions}"
 EFFORT="${EFFORT:-xhigh}"
 MODEL="${MODEL:-}"
 
@@ -121,15 +121,15 @@ dispatch 成功启动后，立即告诉用户：
 
 ```text
 任务已进入 Claude Code tmux 会话：
-tmux -S /root/clawdbot-tmux-sockets/claude-code.sock attach -t <TMUX_SESSION>
+tmux -S /home/ubuntu/clawdbot-tmux-sockets/claude-code.sock attach -t <TMUX_SESSION>
 
 按 Ctrl+B 然后按 D 可以退出观察，不会终止任务。
 ```
 
 ## 关键文件路径
 
-- Claude dispatch：`/root/.openclaw/skills/claude-dispatch/dispatch-claude-code.sh`
-- Claude runner：`/root/.openclaw/skills/claude-dispatch/claude_code_run.py`
-- Claude hook：`/root/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh`
-- tmux socket：`/root/clawdbot-tmux-sockets/claude-code.sock`
-- Claude 任务状态：`/root/clawd/data/claude-code-results/`
+- Claude dispatch：`/home/ubuntu/.openclaw/skills/claude-dispatch/dispatch-claude-code.sh`
+- Claude runner：`/home/ubuntu/.openclaw/skills/claude-dispatch/claude_code_run.py`
+- Claude hook：`/home/ubuntu/.openclaw/skills/claude-dispatch/hooks/notify-agi.sh`
+- tmux socket：`/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock`
+- Claude 任务状态：`/home/ubuntu/clawd/data/claude-code-results/`

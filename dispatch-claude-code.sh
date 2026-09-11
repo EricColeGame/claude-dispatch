@@ -382,14 +382,7 @@ $ATTACH_CMD
         timeout 30 openclaw message send --channel feishu --target "$FEISHU_TARGET" --message "$NOTIFY_MSG" 2>/dev/null || true
     fi
 
-    # 自动启动建站任务监督器 (Supervisor)，全流程防卡顿接续推进
-    SUPERVISOR_SCRIPT="/home/ubuntu/.openclaw/skills/website-create/scripts/watch-and-drive.sh"
-    if [ -x "$SUPERVISOR_SCRIPT" ] && [[ "$TASK_NAME" =~ website-create || "$TMUX_SESSION" =~ website-create || "$PROMPT" =~ website-create || "$PROMPT" =~ 建站 ]]; then
-        DOMAIN_PARAM=$(echo "$PROMPT" | grep -oE '[a-zA-Z0-9][-a-zA-Z0-9]*\.(top|com|net|org|xyz|wiki|cc|sbs)' | head -1 || echo "")
-        echo "🛡️  启动后台监督推进器 (watch-and-drive.sh)..."
-        nohup "$SUPERVISOR_SCRIPT" "$TMUX_SESSION" "$DOMAIN_PARAM" > "/tmp/supervisor-${TMUX_SESSION}.log" 2>&1 &
-        echo "   Supervisor log: /tmp/supervisor-${TMUX_SESSION}.log"
-    fi
+    # 建站任务流转已全面收敛至官方 Stop Hook (website-stage-router.sh)，无需且禁止外部 tmux send-keys 注入
 else
     # ---- 默认模式（现有逻辑）----
     echo "🚀 Launching Claude Code..."

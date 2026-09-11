@@ -49,8 +49,8 @@ TMUX_SOCKET="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
 log "解析到域名: DOMAIN=${DOMAIN}, META_DIR=${META_DIR}"
 
 if [ ! -d "$META_DIR" ]; then
-  log "元数据目录尚未建立: ${META_DIR}，等待初始化或由前序步骤创建"
-  exit 0
+  mkdir -p "$META_DIR"
+  drive_stage "阶段1~3" "严禁输出分析总结！元数据目录已创建，立即运行 data-analytics 与 chatgpt-dev-info 生成 00基础信息.md 与 00首页信息.md，完成后立即推进下一阶段。"
 fi
 
 # 检查线上 200/301 探活（若已上线则完全退出）

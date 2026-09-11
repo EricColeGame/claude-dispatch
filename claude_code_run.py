@@ -430,9 +430,15 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
 
         # Workspace trust prompt (first run in a new folder).
         if tmux_wait_for_text(socket_path, target, "Yes, I trust this folder", timeout_s=20):
-            # The default selection is "No, exit". Select the second option
-            # explicitly before submitting; pressing Enter first exits Claude.
-            subprocess.run(tmux_cmd(socket_path, "send-keys", "-t", target, "Down"), check=False)
+            # Capture pane to check if '❯ Yes, I trust this folder' is already selected
+            pane_txt = ""
+            try:
+                p = subprocess.run(tmux_cmd(socket_path, "capture-pane", "-p", "-t", target), capture_output=True, text=True, check=False)
+                pane_txt = p.stdout or ""
+            except Exception:
+                pass
+            if "❯ Yes, I trust this folder" not in pane_txt:
+                subprocess.run(tmux_cmd(socket_path, "send-keys", "-t", target, "Down"), check=False)
             subprocess.run(tmux_cmd(socket_path, "send-keys", "-t", target, "Enter"), check=False)
             time.sleep(1.0)
 

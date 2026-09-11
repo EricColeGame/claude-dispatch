@@ -66,13 +66,8 @@ drive_stage() {
   local prompt_text="$2"
   log "触发自动接续: [${next_stage}] -> ${prompt_text}"
 
-  # 后台延时向 tmux 补一个兜底回车/注入，确保终端不卡顿
-  (
-    sleep 2
-    tmux -S "$TMUX_SOCKET" send-keys -t "$SESSION_NAME" C-u "$prompt_text" C-m 2>/dev/null || true
-  ) &
-
-  # Claude Code Stop Hook 标准 JSON 协议阻断停止并喂入下一轮 Prompt
+  # 仅通过 Claude Code 官方 Stop Hook JSON 协议注入下一轮 Prompt
+  # 严禁使用后台 tmux send-keys，否则在 Claude 处于运行/思考状态时字符会堆积在 ❯ 输入框中
   cat << JSON_RESP
 {
   "decision": "block",

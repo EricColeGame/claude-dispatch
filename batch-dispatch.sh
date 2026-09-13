@@ -32,7 +32,6 @@
 set -euo pipefail
 
 # 忽略挂断信号，防止终端关闭或父会话断开时误杀批处理串行主循环
-trap '' HUP
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH_SCRIPT="$SCRIPT_DIR/dispatch-claude-code.sh"

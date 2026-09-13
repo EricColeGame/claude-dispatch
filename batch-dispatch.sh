@@ -31,6 +31,9 @@
 
 set -euo pipefail
 
+# 忽略挂断信号，防止终端关闭或父会话断开时误杀批处理串行主循环
+trap '' HUP
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH_SCRIPT="$SCRIPT_DIR/dispatch-claude-code.sh"
 TMP_DIR="${SCRIPT_DIR}/tmp"
@@ -380,6 +383,17 @@ execute_task() {
         if tmux -S "$TMUX_SOCKET" has-session -t "$prev_session" 2>/dev/null; then
             tmux -S "$TMUX_SOCKET" kill-session -t "$prev_session" 2>/dev/null \
                 && echo "🧹 已销毁上一个 idle 会话: $prev_session"
+        fi
+    fi
+
+    # 幂等断点自愈检查：如果目标仓库 Git 提交记录中已明确包含该 Part，则自动跳过
+    local part_prefix="${task_name%%-*}"
+    if [ -d "${WORKDIR}/.git" ]; then
+        if git -C "$WORKDIR" log -n 15 --oneline 2>/dev/null | grep -Eq "feat\(${part_prefix}\):|feat: ${part_prefix}|${part_prefix}"; then
+            echo "⏭️  [断点自愈] 检测到工作目录已有 ${part_prefix} 的完成提交记录，自动跳过此任务进入下一阶段"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            LAST_PROMPT="$prompt"
+            return 0
         fi
     fi
 

@@ -73,9 +73,15 @@ capture_tmux_output() {
 check_task_completion() {
     local output="$1"
 
-    # 检测明确的未完成标志（等待输入状态，非完成判定）
+    # 1. 检测明确的未完成标志（等待输入状态，非完成判定）
     if echo "$output" | grep -qE "(Interrupted.*What should Claude do|请指示如何继续|用户是否希望我：|AskUserQuestion)"; then
         echo "waiting_input"
+        return
+    fi
+
+    # 2. 检测明确的门禁阻断与失败标志（防止失败任务被错误放行为 done）
+    if echo "$output" | grep -qE "(立即阻断流程|禁止放行|严重阻断|任务执行失败|门禁核验失败|Error: 尚未存在 Part 7|未发现 Part 7)"; then
+        echo "failed"
         return
     fi
 
@@ -394,6 +400,10 @@ process_task() {
     case "$completion_status" in
         "done")
             write_status="done"
+            ;;
+        "failed")
+            write_status="failed"
+            log "Task explicitly blocked or failed, marking as failed"
             ;;
         "waiting_input")
             write_status="waiting_input"

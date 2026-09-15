@@ -80,7 +80,8 @@ check_task_completion() {
     fi
 
     # 2. 检测明确的门禁阻断与失败标志（防止失败任务被错误放行为 done）
-    if echo "$output" | grep -qE "(立即阻断流程|禁止放行|严重阻断|任务执行失败|门禁核验失败|Error: 尚未存在 Part 7|未发现 Part 7)"; then
+    # 覆盖：任务失败阻断通知、触发安全门禁、严禁伪造上线、终止发布、探活未通过、HTTP 000、物料缺失等
+    if echo "$output" | grep -qiE "(任务失败阻断通知|失败阻断|触发安全门禁|严禁伪造上线|终止发布与提交流程|终止发布|立即阻断流程|禁止放行|严重阻断|任务执行失败|门禁核验失败|探活未通过|HTTP 000|Error: 尚未存在 Part 7|未发现 Part 7|最终探活未通过)"; then
         echo "failed"
         return
     fi

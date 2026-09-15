@@ -46,6 +46,20 @@ DOMAIN_SLUG="${DOMAIN//./_}"
 META_DIR="/home/ubuntu/Documents/GameProjects/0_meta/${DOMAIN_SLUG}"
 TMUX_SOCKET="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
 
+drive_stage() {
+  local next_stage="$1"
+  local prompt_text="$2"
+  log "触发自动接续: [${next_stage}] -> ${prompt_text}"
+
+  # 仅通过 Claude Code 官方 Stop Hook JSON 协议注入下一轮 Prompt
+  # 严禁使用后台 tmux send-keys，否则在 Claude 处于运行/思考状态时字符会堆积在 ❯ 输入框中
+  cat << JSON_RESP
+{
+  "decision": "block",
+  "reason": "建站流程未完成，自动推进至${next_stage}：${prompt_text}"
+}
+
+
 log "解析到域名: DOMAIN=${DOMAIN}, META_DIR=${META_DIR}"
 
 if [ ! -d "$META_DIR" ]; then
@@ -61,18 +75,6 @@ if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "301" ]]; then
 fi
 
 # 双重推进保险：同时进行 官方 JSON Block 推进 与 终端后台注入，确保无论何种环境必被激活
-drive_stage() {
-  local next_stage="$1"
-  local prompt_text="$2"
-  log "触发自动接续: [${next_stage}] -> ${prompt_text}"
-
-  # 仅通过 Claude Code 官方 Stop Hook JSON 协议注入下一轮 Prompt
-  # 严禁使用后台 tmux send-keys，否则在 Claude 处于运行/思考状态时字符会堆积在 ❯ 输入框中
-  cat << JSON_RESP
-{
-  "decision": "block",
-  "reason": "建站流程未完成，自动推进至${next_stage}：${prompt_text}"
-}
 JSON_RESP
   exit 0
 }

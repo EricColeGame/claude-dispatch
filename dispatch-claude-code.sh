@@ -196,7 +196,8 @@ jq -n \
     --arg tmux_session "$TMUX_SESSION" \
     --arg tmux_socket "$TMUX_SOCKET" \
     --arg parent_session "${PARENT_SESSION}" \
-    '{task_name: $name, task_id: $task_id, feishu_target: $target, cdp_port: $cdp_port, callback_session: $session, prompt: $prompt, workdir: $workdir, started_at: $ts, agent_teams: ($agent_teams == "1"), run_mode: $run_mode, tmux_session: $tmux_session, tmux_socket: $tmux_socket, parent_tmux_session: $parent_session, status: "running"}' \
+    --arg validation_required "${BATCH_VALIDATION_REQUIRED:-false}" \
+    '{task_name: $name, task_id: $task_id, feishu_target: $target, cdp_port: $cdp_port, callback_session: $session, prompt: $prompt, workdir: $workdir, started_at: $ts, agent_teams: ($agent_teams == "1"), run_mode: $run_mode, tmux_session: $tmux_session, tmux_socket: $tmux_socket, parent_tmux_session: $parent_session, business_validation_required: ($validation_required == "true"), status: "running"}' \
     > "$META_FILE"
 
 # 写入 current-task-id.txt（用于 hook 查找）
@@ -353,8 +354,12 @@ if [ -n "$ENABLE_TMUX" ]; then
     echo ""
 
     # 运行 claude_code_run.py（它会处理 tmux 逻辑）
-    "${CMD[@]}" 2>&1 | tee "$TASK_OUTPUT"
-    EXIT_CODE=${PIPESTATUS[0]}
+    if "${CMD[@]}" 2>&1 | tee "$TASK_OUTPUT"; then
+        EXIT_CODE=0
+    else
+        EXIT_CODE=${PIPESTATUS[0]}
+        [ "$EXIT_CODE" -ne 0 ] || EXIT_CODE=1
+    fi
 
     echo ""
     echo "✅ Task sent to Claude Code session: $TMUX_SESSION"
@@ -394,15 +399,21 @@ else
     EXIT_CODE=${PIPESTATUS[0]}
 
     echo ""
-    echo "✅ Claude Code exited with code: $EXIT_CODE"
+    echo "Claude Code exited with code: $EXIT_CODE"
     echo "   Hook should have fired automatically."
     echo "   Results: ${RESULT_DIR}/latest.json"
 
     # Update meta with completion
     if [ -f "$META_FILE" ]; then
-        jq --arg code "$EXIT_CODE" --arg ts "$(date -Iseconds)" \
-            '. + {exit_code: ($code | tonumber), completed_at: $ts, status: "done"}' \
-            "$META_FILE" > "${META_FILE}.tmp" && mv "${META_FILE}.tmp" "$META_FILE"
+        if [ "$EXIT_CODE" -eq 0 ]; then
+            jq --arg code "$EXIT_CODE" --arg ts "$(date -Iseconds)" \
+                '. + {exit_code: ($code | tonumber), completed_at: $ts} | if .status == "running" then .status = "uncertain" else . end' \
+                "$META_FILE" > "${META_FILE}.tmp" && mv "${META_FILE}.tmp" "$META_FILE"
+        else
+            jq --arg code "$EXIT_CODE" --arg ts "$(date -Iseconds)" \
+                '. + {exit_code: ($code | tonumber), completed_at: $ts, status: "failed"}' \
+                "$META_FILE" > "${META_FILE}.tmp" && mv "${META_FILE}.tmp" "$META_FILE"
+        fi
     fi
 fi
 

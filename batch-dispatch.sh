@@ -164,6 +164,8 @@ FAILED_COUNT=0
 TIMEOUT_COUNT=0
 START_TIME=$(date +%s)
 WAIT_RESULT=""
+VALIDATOR=""
+STATE_DIR=""
 
 usage() {
     cat << EOF
@@ -188,6 +190,8 @@ usage() {
   --model MODEL            模型覆盖（如 claude-sonnet-4-6）
   --effort LEVEL           effort 等级（默认 xhigh）
   --stop-on-error          任务失败时停止（默认: 继续）
+  --validator FILE        Agent 回合结束后执行的业务验收入口
+  --state-dir DIR         持久化阶段状态并在重启时恢复（需 --validator）
   -h, --help               显示帮助信息
 
 JSON 格式:
@@ -221,10 +225,21 @@ parse_args() {
             --effort) EFFORT="$2"; shift 2;;
             --start-index) START_INDEX="$2"; shift 2;;
             --stop-on-error) STOP_ON_ERROR=true; shift;;
+            --validator) VALIDATOR="$2"; shift 2;;
+            --state-dir) STATE_DIR="$2"; shift 2;;
             -h|--help) usage; exit 0;;
             *) echo "未知参数: $1" >&2; usage; exit 1;;
         esac
     done
+
+    if [[ -n "$VALIDATOR" && ! -x "$VALIDATOR" ]]; then
+        echo "错误: 业务验收入口不可执行: $VALIDATOR" >&2
+        exit 1
+    fi
+    if [[ -n "$STATE_DIR" && -z "$VALIDATOR" ]]; then
+        echo "错误: --state-dir 必须同时配置 --validator" >&2
+        exit 1
+    fi
 
     if [[ -n "$TASKS_FILE" && -n "$MARKDOWN_DIR" ]] || [[ -z "$TASKS_FILE" && -z "$MARKDOWN_DIR" ]]; then
         echo "错误: --tasks 与 --markdown-dir 必须且只能选择一个" >&2
@@ -301,10 +316,10 @@ wait_for_task_completion() {
     local task_id=$1
     local timeout=$2
     local task_start_time=$3  # 任务启动时间（从外部传入）
-    local wait_start_time=$(date +%s)
     local elapsed=0
     local check_interval=20
     local task_file="${TASKS_DIR}/${task_id}.json"
+    local session_name="${4:-}"
 
     WAIT_RESULT=""
     echo "⏳ 等待任务完成: $task_id (超时: ${timeout}s)"
@@ -312,10 +327,15 @@ wait_for_task_completion() {
 
     while [ $elapsed -lt $timeout ]; do
         if [ -f "$task_file" ]; then
+            if ! jq -e --arg task_id "$task_id" '.task_id == $task_id' "$task_file" >/dev/null 2>&1; then
+                WAIT_RESULT="identity_mismatch"
+                echo "❌ 任务状态文件归属不匹配: $task_id"
+                return 1
+            fi
             local status=$(jq -r '.status // ""' "$task_file" 2>/dev/null || echo "")
             local timestamp=$(jq -r '.timestamp // ""' "$task_file" 2>/dev/null || echo "")
 
-            if [ "$status" == "done" ]; then
+            if [ "$status" == "done" ] || [ "$status" == "awaiting_validation" ]; then
                 # 验证时间戳（确保不是旧结果）
                 local result_time=$(date -d "$timestamp" +%s 2>/dev/null || echo 0)
                 if [ $result_time -ge $task_start_time ]; then
@@ -345,8 +365,25 @@ wait_for_task_completion() {
             fi
         fi
 
+        if [ -n "$session_name" ] && ! tmux -S "$TMUX_SOCKET" has-session -t "$session_name" 2>/dev/null; then
+            WAIT_RESULT="worker_exited"
+            echo "❌ 当前任务会话已退出: $task_id / $session_name"
+            return 1
+        fi
+        if [ -n "$session_name" ]; then
+            local pane_command
+            pane_command=$(tmux -S "$TMUX_SOCKET" display-message -p -t "${session_name}:0.0" '#{pane_current_command}' 2>/dev/null || true)
+            case "$pane_command" in
+                bash|sh|zsh|fish)
+                    WAIT_RESULT="worker_exited"
+                    echo "❌ Agent 已退出，只剩 shell: $task_id / $session_name"
+                    return 1
+                    ;;
+            esac
+        fi
+
         sleep $check_interval
-        elapsed=$((elapsed + check_interval))
+        elapsed=$(( $(date +%s) - task_start_time ))
 
         # 每 10 秒显示一次进度
         if [ $((elapsed % 10)) -eq 0 ]; then
@@ -360,10 +397,31 @@ wait_for_task_completion() {
 }
 
 # 执行单个任务
-execute_task() {
+execute_task_attempt() {
     local task_name=$1
     local prompt=$2
     local index=$3
+    local attempt=${4:-0}
+    local resume_file=${5:-}
+    local part_session="${TMUX_SESSION}-p${index}"
+    if [ "$attempt" -gt 0 ]; then
+        part_session="${part_session}-retry${attempt}"
+    fi
+    if [ -n "$resume_file" ]; then
+        part_session=$(jq -er '.session' "$resume_file") || return 1
+    fi
+    WAIT_RESULT=""
+    if [ -n "$resume_file" ]; then
+        local expected_task_id
+        expected_task_id=$(jq -er '.task_id' "$resume_file") || return 1
+        if ! jq -e --arg task_id "$expected_task_id" --arg session "$part_session" \
+            '.task_id == $task_id and .tmux_session == $session' \
+            "${RESULT_DIR}/sessions/${part_session}/task-meta.json" >/dev/null; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            WAIT_RESULT="identity_mismatch"
+            return 1
+        fi
+    fi
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -377,22 +435,11 @@ execute_task() {
     # 立即 kill 之，把同时存活会话数压到 ≤2、释放内存。杀的是早已 done 的 idle 旧会话，
     # 即便 kill 触发其残留 Stop（env=旧 part，此刻已 not in running），也会被 hook 的
     # resolve 门禁直接忽略（不 fallback）——故时机最安全，不会污染当前正在跑的 part。
-    if [ "$index" -gt 1 ]; then
-        local prev_session="${TMUX_SESSION}-p$((index - 1))"
+    if [ -n "${LAST_SESSION:-}" ] && [ "$LAST_SESSION" != "$part_session" ]; then
+        local prev_session="$LAST_SESSION"
         if tmux -S "$TMUX_SOCKET" has-session -t "$prev_session" 2>/dev/null; then
             tmux -S "$TMUX_SOCKET" kill-session -t "$prev_session" 2>/dev/null \
                 && echo "🧹 已销毁上一个 idle 会话: $prev_session"
-        fi
-    fi
-
-    # 幂等断点自愈检查：如果目标仓库 Git 提交记录中已明确包含该 Part，则自动跳过
-    local part_prefix="${task_name%%-*}"
-    if [ -d "${WORKDIR}/.git" ]; then
-        if git -C "$WORKDIR" log -n 15 --oneline 2>/dev/null | grep -Eq "feat\(${part_prefix}\):|feat: ${part_prefix}|${part_prefix}"; then
-            echo "⏭️  [断点自愈] 检测到工作目录已有 ${part_prefix} 的完成提交记录，自动跳过此任务进入下一阶段"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            LAST_PROMPT="$prompt"
-            return 0
         fi
     fi
 
@@ -425,7 +472,7 @@ $prompt"
         -n "$task_name"
         -w "$WORKDIR"
         --permission-mode "$PERMISSION_MODE"
-        --tmux-session "${TMUX_SESSION}-p${index}"
+        --tmux-session "$part_session"
     )
 
     if [ -n "$FEISHU_TARGET" ]; then
@@ -442,9 +489,18 @@ $prompt"
 
     # 执行 dispatch 并传递环境变量
     local dispatch_output
+    LAST_SESSION="$part_session"
+    local task_id=""
+    if [ -n "$resume_file" ]; then
+        task_id=$(jq -er '.task_id' "$resume_file") || return 1
+        task_start_time=$(jq -er '.started_epoch' "$resume_file") || return 1
+        dispatch_output=""
+        echo "♻️ 接回原任务: $task_id / $part_session"
+    else
     if dispatch_output=$(
         FORCE_NEW_SESSION=true \
-        env -u CLAUDECODE "$DISPATCH_SCRIPT" "${dispatch_args[@]}" 2>&1
+        BATCH_VALIDATION_REQUIRED="$([ -n "$VALIDATOR" ] && echo true || echo false)" \
+        env -u CLAUDECODE "$DISPATCH_SCRIPT" "${dispatch_args[@]}" 9>&- 2>&1
     ); then
         :
     else
@@ -461,36 +517,46 @@ $prompt"
     fi
 
     # 从输出中提取 Task ID
-    local task_id=$(echo "$dispatch_output" | grep "Task ID:" | sed 's/.*Task ID: //' | tr -d ' ')
+    task_id=$(echo "$dispatch_output" | grep "Task ID:" | tail -1 | sed 's/.*Task ID: //' | tr -d ' ')
 
     if [ -z "$task_id" ]; then
         echo "⚠️  警告: 无法提取 Task ID，尝试从元数据文件读取..."
-        task_id=$(jq -r '.task_id // ""' "${RESULT_DIR}/task-meta.json" 2>/dev/null || echo "")
+        task_id=$(jq -r --arg session "$part_session" \
+            'select(.tmux_session == $session) | .task_id // ""' \
+            "${RESULT_DIR}/sessions/${part_session}/task-meta.json" 2>/dev/null || echo "")
     fi
 
-    if [ -z "$task_id" ]; then
+    if ! [[ "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
         echo "❌ 错误: 无法获取 Task ID"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 1
     fi
+    fi
 
     echo "   Task ID: $task_id"
+    LAST_TASK_ID="$task_id"
+    checkpoint_stage "$index" "$task_name" running "$attempt" "$task_start_time" || return 1
 
     # 自动兜底：dispatch 返回后 CC 偶发卡空❯（CC v2.x focus-binding window 超长，
     # refactor part1 多站复现）。检测到卡空则从 task-meta.json 重注入 prompt。
-    local part_session="${TMUX_SESSION}-p${index}"
     local part_task_meta
     part_task_meta=$(echo "$dispatch_output" | grep -oP 'Task metadata written: \K\S+' | head -1 || true)
     if [ -z "$part_task_meta" ]; then
         part_task_meta="${RESULT_DIR}/sessions/${part_session}/task-meta.json"
     fi
-    if ! reinject_idle_prompt_if_needed "$part_session" "$part_task_meta"; then
+    if [ -z "$resume_file" ] && ! reinject_idle_prompt_if_needed "$part_session" "$part_task_meta"; then
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 1
     fi
 
     # 等待任务完成（传递任务启动时间）
-    if wait_for_task_completion "$task_id" "$WAIT_TIMEOUT" "$task_start_time"; then
+    if wait_for_task_completion "$task_id" "$WAIT_TIMEOUT" "$task_start_time" "$part_session"; then
+        if ! validate_task_result "$task_name" "$task_id"; then
+            WAIT_RESULT="validation_failed"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            LAST_PROMPT="$prompt"
+            return 1
+        fi
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         LAST_PROMPT="$prompt"      # 保存当前 prompt（不是 full_prompt）
         LAST_TASK_ID="$task_id"    # 保存当前 task_id
@@ -498,14 +564,6 @@ $prompt"
     else
         if [ "$WAIT_RESULT" == "timeout" ]; then
             TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1))
-            if [ "$STOP_ON_ERROR" == "true" ]; then
-                FAILED_COUNT=$((FAILED_COUNT + 1))
-                return 1
-            fi
-            LAST_PROMPT="$prompt"      # 超时也保留上下文
-            LAST_TASK_ID="$task_id"
-            echo "⏭️  超时已记录为非致命，继续后续任务"
-            return 0
         fi
         FAILED_COUNT=$((FAILED_COUNT + 1))
         LAST_PROMPT="$prompt"      # 即使失败也保存
@@ -514,9 +572,145 @@ $prompt"
     fi
 }
 
+checkpoint_stage() {
+    local index=$1 task_name=$2 state=$3 attempt=$4 started_epoch=${5:-0}
+    [ -n "$STATE_DIR" ] || return 0
+    local state_file="${STATE_DIR}/part${index}.json"
+    local checkpoint_tmp
+    checkpoint_tmp=$(mktemp "${STATE_DIR}/.checkpoint-XXXXXX") || return 1
+    jq -n --arg name "$task_name" --arg state "$state" --arg hash "$stage_fingerprint" \
+        --arg task_id "${LAST_TASK_ID:-}" --arg session "${LAST_SESSION:-}" \
+        --argjson attempt "$attempt" --argjson started "$started_epoch" --arg ts "$(date -Iseconds)" \
+        '{task_name: $name, state: $state, fingerprint: $hash, task_id: $task_id,
+          session: $session, attempt: $attempt, started_epoch: $started, updated_at: $ts}' \
+        > "$checkpoint_tmp" && mv "$checkpoint_tmp" "$state_file"
+}
+
+validate_task_result() {
+    local task_name=$1
+    local task_id=$2
+    local task_file="${TASKS_DIR}/${task_id}.json"
+    local validation_log
+    local validation_status=failed
+    [ -n "$VALIDATOR" ] || return 0
+    mkdir -p "$TMP_DIR" || return 1
+    validation_log=$(mktemp "${TMP_DIR}/validation-XXXXXX.log") || return 1
+    if timeout 180 "$VALIDATOR" "$task_name" "$WORKDIR" > "$validation_log" 2>&1; then
+        validation_status=passed
+    fi
+    cat "$validation_log"
+    jq --arg status "$validation_status" --arg log "$validation_log" --arg ts "$(date -Iseconds)" \
+        '. + {status: (if $status == "passed" then "done" else "failed" end),
+          business_validation: {status: $status, log: $log, timestamp: $ts}}' \
+        "$task_file" > "${task_file}.validation.tmp" && \
+        mv "${task_file}.validation.tmp" "$task_file" || return 1
+    [ "$validation_status" = passed ]
+}
+
+execute_task() {
+    local task_name=$1
+    local prompt=$2
+    local index=$3
+    local prior_prompt="${LAST_PROMPT:-}"
+    local prior_task_id="${LAST_TASK_ID:-}"
+    local failures_before=$FAILED_COUNT
+    local recovery_file
+    local failed_task_id
+    local recovery_prompt
+    local recovery_result
+    local attempt=0
+    local resume_file=""
+    local state_file="${STATE_DIR}/part${index}.json"
+    local stage_fingerprint
+    stage_fingerprint=$(printf '%s\0%s\0%s' "$WORKDIR" "$task_name" "$prompt" | sha256sum | cut -d ' ' -f1)
+    if [ -n "$STATE_DIR" ] && [ -f "$state_file" ] && \
+        jq -e --arg hash "$stage_fingerprint" '.fingerprint == $hash' "$state_file" >/dev/null; then
+        local saved_state
+        saved_state=$(jq -r '.state' "$state_file")
+        if [ "$saved_state" = done ] && timeout 180 "$VALIDATOR" "$task_name" "$WORKDIR"; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            LAST_PROMPT="$prompt"
+            LAST_TASK_ID=$(jq -r '.task_id' "$state_file")
+            echo "♻️ ${task_name}: 已完成产物重新验收通过，跳过派发"
+            return 0
+        fi
+        if [ "$saved_state" = running ]; then
+            resume_file="$state_file"
+            attempt=$(jq -er '.attempt | select(. == 0 or . == 1)' "$state_file") || return 1
+        fi
+        if [ "$saved_state" = failed ] && jq -e '.attempt >= 1' "$state_file" >/dev/null; then
+            if timeout 180 "$VALIDATOR" "$task_name" "$WORKDIR"; then
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                LAST_PROMPT="$prompt"
+                LAST_TASK_ID=$(jq -r '.task_id' "$state_file")
+                checkpoint_stage "$index" "$task_name" done 1 || return 1
+                return 0
+            fi
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            WAIT_RESULT="retry_exhausted"
+            echo "❌ ${task_name}: 自动恢复额度已耗尽，保留失败检查点: $state_file"
+            return 1
+        fi
+    fi
+
+    if execute_task_attempt "$task_name" "$prompt" "$index" "$attempt" "$resume_file"; then
+        checkpoint_stage "$index" "$task_name" done "$attempt" || return 1
+        return 0
+    fi
+    if [ "$attempt" -ge 1 ] || { [ "$WAIT_RESULT" != "waiting_input" ] && \
+        [ "$WAIT_RESULT" != "validation_failed" ] && [ "$WAIT_RESULT" != "worker_exited" ]; }; then
+        checkpoint_stage "$index" "$task_name" failed "$attempt" || return 1
+        return 1
+    fi
+
+    failed_task_id="$LAST_TASK_ID"
+    mkdir -p "$TMP_DIR" || return 1
+    recovery_file=$(mktemp "${TMP_DIR}/recovery-XXXXXX.json") || return 1
+    jq -n --arg task_id "$failed_task_id" --arg task_name "$task_name" \
+        --arg session "$LAST_SESSION" --arg reason "$WAIT_RESULT" --arg ts "$(date -Iseconds)" \
+        '{task_id: $task_id, task_name: $task_name, previous_session: $session,
+          state: "retrying", reason: $reason, retry_count: 1, retry_limit: 1, timestamp: $ts}' \
+        > "$recovery_file" || return 1
+
+    recovery_prompt="$prompt
+
+【无人值守恢复：同一任务的唯一自动重试】
+上一尝试任务 ID：${failed_task_id}
+上一尝试结果文件：${TASKS_DIR}/${failed_task_id}.json
+先读取上述结果、business_validation.log（如有）和现有产物，核实已完成的步骤，只修复未通过验收的步骤并继续原任务。不要重复注册域名、重复提交或重新生成已通过验收的产物。
+常规实现选择请在原任务授权范围内自行决定，执行并验证后再结束。缺少必要凭据、不可推断的信息或权限时明确报告阻断原因；不得猜测凭据、替用户批准操作、降低验收标准或启动额外重试。"
+
+    LAST_PROMPT="$prior_prompt"
+    LAST_TASK_ID="$prior_task_id"
+    FAILED_COUNT=$failures_before
+    echo "🔄 ${task_name} ${WAIT_RESULT}：自动恢复 1/1，记录：${recovery_file}"
+    if execute_task_attempt "$task_name" "$recovery_prompt" "$index" 1; then
+        recovery_result="done"
+        LAST_PROMPT="$prompt"
+    else
+        recovery_result="failed"
+    fi
+    checkpoint_stage "$index" "$task_name" "$recovery_result" 1 || return 1
+    jq --arg state "$recovery_result" --arg task_id "${LAST_TASK_ID:-}" \
+        --arg session "$LAST_SESSION" --arg ts "$(date -Iseconds)" \
+        '. + {state: $state, retry_task_id: $task_id, retry_session: $session, completed_at: $ts}' \
+        "$recovery_file" > "${recovery_file}.tmp" && \
+        mv "${recovery_file}.tmp" "$recovery_file" || return 1
+    [ "$recovery_result" = "done" ]
+}
+
 # 主流程
 main() {
     parse_args "$@"
+    if [ -n "$STATE_DIR" ]; then
+        mkdir -p "$STATE_DIR"
+        exec 9>"${STATE_DIR}/.lock"
+        if ! flock -n 9; then
+            echo "错误: 同一状态目录已有调度器运行: $STATE_DIR" >&2
+            exit 1
+        fi
+    fi
+    trap '' HUP
 
     echo "🚀 批量串行派发 Claude Code 任务"
     echo "   任务输入: ${TASKS_FILE:-$MARKDOWN_DIR}"
@@ -530,6 +724,7 @@ main() {
     LAST_PROMPT=""
     LAST_TASK_ID=""
     LAST_INDEX=0
+    LAST_SESSION=""
 
     # 读取任务列表
     local tasks_json
@@ -558,10 +753,17 @@ main() {
         if [ -z "$prompt" ]; then
             echo "⚠️  跳过任务 $task_name: prompt 为空"
             FAILED_COUNT=$((FAILED_COUNT + 1))
+            if [ "$STOP_ON_ERROR" = true ]; then
+                break
+            fi
             continue
         fi
 
+        local failures_before=$FAILED_COUNT
         if ! execute_task "$task_name" "$prompt" "$((i + 1))"; then
+            if [ "$FAILED_COUNT" -eq "$failures_before" ]; then
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
             if [ "$STOP_ON_ERROR" == "true" ]; then
                 echo ""
                 echo "❌ 任务失败，停止执行（--stop-on-error）"
@@ -573,7 +775,7 @@ main() {
     # 销毁最后一个 part 的会话：循环结束后它没有"下一个 part"来触发销毁，在此统一清理，
     # 释放内存。break 提前退出时 LAST_INDEX 也指向最后真正执行的 part。
     if [ "${LAST_INDEX:-0}" -ge 1 ]; then
-        local last_session="${TMUX_SESSION}-p${LAST_INDEX}"
+        local last_session="$LAST_SESSION"
         if tmux -S "$TMUX_SOCKET" has-session -t "$last_session" 2>/dev/null; then
             tmux -S "$TMUX_SOCKET" kill-session -t "$last_session" 2>/dev/null \
                 && echo "🧹 已销毁最后一个会话: $last_session"
@@ -590,14 +792,16 @@ main() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "   总任务数: $TOTAL_TASKS"
     echo "   成功: $SUCCESS_COUNT"
-    echo "   超时(非致命): $TIMEOUT_COUNT"
+    echo "   超时: $TIMEOUT_COUNT"
     echo "   失败: $FAILED_COUNT"
     echo "   总耗时: ${total_time}s"
     echo ""
 
-    if [ $FAILED_COUNT -gt 0 ]; then
+    if [ "$FAILED_COUNT" -gt 0 ] || [ "$SUCCESS_COUNT" -ne "$((TOTAL_TASKS - START_INDEX + 1))" ]; then
         exit 1
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

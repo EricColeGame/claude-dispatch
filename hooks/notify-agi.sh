@@ -382,6 +382,10 @@ process_task() {
 
     # 检测完成状态
     local completion_status=$(check_task_completion "$output")
+    if [ "$completion_status" = failed ] && \
+        jq -e '.business_validation_required == true' "$meta_file" >/dev/null 2>&1; then
+        completion_status="done"
+    fi
     log "Task completion status: $completion_status"
 
     # 归属门禁：仅当判为 done 时，校验这次 Stop 是否真属于当前 part 且 prompt 已提交。
@@ -400,7 +404,11 @@ process_task() {
     local write_status=""
     case "$completion_status" in
         "done")
-            write_status="done"
+            if jq -e '.business_validation_required == true' "$meta_file" >/dev/null 2>&1; then
+                write_status="awaiting_validation"
+            else
+                write_status="done"
+            fi
             ;;
         "failed")
             write_status="failed"
@@ -411,9 +419,8 @@ process_task() {
             log "Task waiting for input, not marking as done"
             ;;
         *)
-            # 默认判定为完成
-            write_status="done"
-            log "Unknown completion status: $completion_status, default to done"
+            mark_task_uncertain "$session_name" "$task_id" "$session_dir" "unknown_completion_status"
+            return 0
             ;;
     esac
 
@@ -465,7 +472,7 @@ process_task() {
     fi
 
     # 只有真正完成才发送通知
-    if [ "$completion_status" != "done" ]; then
+    if [ "$write_status" != "done" ]; then
         log "Task not done, skip notifications"
         return 0
     fi

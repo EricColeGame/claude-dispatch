@@ -505,6 +505,14 @@ $prompt"
         :
     else
         echo "$dispatch_output"
+        LAST_TASK_ID=""
+        LAST_SESSION="$part_session"
+        WAIT_RESULT="dispatch_failed"
+        local failed_meta="${RESULT_DIR}/sessions/${part_session}/task-meta.json"
+        if [ -f "$failed_meta" ]; then
+            LAST_TASK_ID=$(jq -r --arg session "$part_session" \
+                'select(.tmux_session == $session) | .task_id // ""' "$failed_meta")
+        fi
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 1
     fi

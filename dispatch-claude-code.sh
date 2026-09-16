@@ -361,6 +361,16 @@ if [ -n "$ENABLE_TMUX" ]; then
         [ "$EXIT_CODE" -ne 0 ] || EXIT_CODE=1
     fi
 
+    if [ "$EXIT_CODE" -ne 0 ]; then
+        jq --argjson code "$EXIT_CODE" --arg ts "$(date -Iseconds)" \
+            '. + {status: "failed", exit_code: $code, completed_at: $ts, error: "Claude startup or prompt injection failed"}' \
+            "$META_FILE" > "${META_FILE}.tmp" && mv "${META_FILE}.tmp" "$META_FILE"
+        mkdir -p "${RESULT_DIR}/tasks"
+        cp "$META_FILE" "${RESULT_DIR}/tasks/${TASK_ID}.json"
+        echo "❌ Claude Code 启动或 Prompt 注入失败: $TASK_ID" >&2
+        exit "$EXIT_CODE"
+    fi
+
     echo ""
     echo "✅ Task sent to Claude Code session: $TMUX_SESSION"
     echo ""

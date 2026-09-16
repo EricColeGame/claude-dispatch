@@ -349,7 +349,14 @@ wait_for_task_completion() {
                     echo "   检测到旧结果（时间戳: $timestamp），继续等待..."
                 fi
             elif [ "$status" == "failed" ]; then
-                WAIT_RESULT="failed"
+                local task_output
+                task_output=$(jq -r '.output // ""' "$task_file" 2>/dev/null || true)
+                if echo "$task_output" | grep -Eiq '529|overloaded|api is at capacity|rate limit'; then
+                    WAIT_RESULT="api_overloaded"
+                    echo "⚠️ API 过载（529/容量不足），准备延迟重试: $task_id"
+                else
+                    WAIT_RESULT="failed"
+                fi
                 echo "❌ 任务失败: $task_id"
                 return 1
             elif [ "$status" == "waiting_input" ]; then
@@ -667,8 +674,12 @@ execute_task() {
     fi
     if [ "$attempt" -ge 1 ] || { [ "$WAIT_RESULT" != "waiting_input" ] && \
         [ "$WAIT_RESULT" != "validation_failed" ] && [ "$WAIT_RESULT" != "worker_exited" ]; }; then
-        checkpoint_stage "$index" "$task_name" failed "$attempt" || return 1
-        return 1
+        if [ "$WAIT_RESULT" = "api_overloaded" ]; then
+            :
+        else
+            checkpoint_stage "$index" "$task_name" failed "$attempt" || return 1
+            return 1
+        fi
     fi
 
     failed_task_id="$LAST_TASK_ID"
@@ -692,6 +703,10 @@ execute_task() {
     LAST_TASK_ID="$prior_task_id"
     FAILED_COUNT=$failures_before
     echo "🔄 ${task_name} ${WAIT_RESULT}：自动恢复 1/1，记录：${recovery_file}"
+    if [ "$WAIT_RESULT" = "api_overloaded" ]; then
+        echo "   API 过载退避 90 秒后重试"
+        sleep 90
+    fi
     if execute_task_attempt "$task_name" "$recovery_prompt" "$index" 1; then
         recovery_result="done"
         LAST_PROMPT="$prompt"

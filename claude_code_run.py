@@ -428,33 +428,27 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
         subprocess.check_call(tmux_cmd(socket_path, "send-keys", "-t", target, "-l", "--", launch))
         subprocess.check_call(tmux_cmd(socket_path, "send-keys", "-t", target, "Enter"))
 
-        # Workspace trust prompt (first run in a new folder).
-        if tmux_wait_for_text(socket_path, target, "Yes, I trust this folder", timeout_s=20):
-            # Capture pane to check if '❯ Yes, I trust this folder' is already selected
-            pane_txt = ""
-            try:
-                p = subprocess.run(tmux_cmd(socket_path, "capture-pane", "-p", "-t", target), capture_output=True, text=True, check=False)
-                pane_txt = p.stdout or ""
-            except Exception:
-                pass
-            if "❯ Yes, I trust this folder" not in pane_txt:
-                subprocess.run(tmux_cmd(socket_path, "send-keys", "-t", target, "Down"), check=False)
-            subprocess.run(tmux_cmd(socket_path, "send-keys", "-t", target, "Enter"), check=False)
-            time.sleep(1.0)
-
-    # Send prompt (works for both new and existing sessions)
     if args.prompt:
-        # Wait until Claude UI is interactive before sending prompt.
-        # 45s timeout: CC UI typically appears in 10-20s; must stay under openclaw exec timeout (~60-90s).
-        ready = tmux_wait_for_any_text(
-            socket_path,
-            target,
-            patterns=["shift+tab to cycle", "accept edits on", "❯"],
-            timeout_s=45,
-            poll_s=0.5,
-        )
+        deadline = time.monotonic() + 65
+        ready = False
+        while time.monotonic() < deadline:
+            pane = subprocess.check_output(
+                tmux_cmd(socket_path, "capture-pane", "-p", "-t", target), text=True
+            )
+            if "Yes, I trust this folder" in pane:
+                if re.search(r"^\s*❯\s+Yes, I trust this folder\s*$", pane, re.M):
+                    subprocess.check_call(tmux_cmd(socket_path, "send-keys", "-t", target, "Enter"))
+                elif re.search(r"^\s*❯\s+No, exit\s*$", pane, re.M):
+                    subprocess.check_call(tmux_cmd(socket_path, "send-keys", "-t", target, "Down"))
+                time.sleep(1)
+                continue
+            if "shift+tab to cycle" in pane or "accept edits on" in pane:
+                ready = True
+                break
+            time.sleep(0.5)
         if not ready:
-            print("WARNING: Claude Code UI not ready after 45s, attempting paste anyway", file=sys.stderr)
+            print("ERROR: Claude chat input not ready; refusing to paste into a startup menu", file=sys.stderr)
+            return 1
         # Focus-binding window in CC v2.x can last several seconds after the
         # '❯' prompt first appears; pasting too early silently drops content
         # even though tmux reports a successful paste-buffer. Wait longer
@@ -471,7 +465,9 @@ def run_interactive_tmux(args: argparse.Namespace) -> int:
         # Write prompt to a temporary file and use tmux load-buffer + paste-buffer
         # Use -p flag on paste-buffer to suppress bracketed paste escape sequences
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+        prompt_tmp = Path(__file__).resolve().parent / 'tmp'
+        prompt_tmp.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w', dir=prompt_tmp, delete=False, suffix='.txt') as f:
             f.write(args.prompt)
             temp_file = f.name
 

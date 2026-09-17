@@ -560,6 +560,16 @@ $prompt"
         part_task_meta="${RESULT_DIR}/sessions/${part_session}/task-meta.json"
     fi
     if [ -z "$resume_file" ] && ! reinject_idle_prompt_if_needed "$part_session" "$part_task_meta"; then
+        WAIT_RESULT="worker_exited"
+        mkdir -p "$TMP_DIR" "$TASKS_DIR"
+        local diagnostic_file="${TMP_DIR}/${task_id}-startup-pane.log"
+        tmux -S "$TMUX_SOCKET" capture-pane -p -t "${part_session}:0.0" 2>/dev/null |
+            sed -E '/ANTHROPIC_|API_KEY|AUTH_TOKEN/d' > "$diagnostic_file" || true
+        jq --arg ts "$(date -Iseconds)" --arg log "$diagnostic_file" \
+            '. + {status: "failed", timestamp: $ts, completed_at: $ts,
+                  error: "worker_exited during startup verification", diagnostic_log: $log}' \
+            "$part_task_meta" > "${TASKS_DIR}/${task_id}.json"
+        cp "${TASKS_DIR}/${task_id}.json" "$part_task_meta"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 1
     fi

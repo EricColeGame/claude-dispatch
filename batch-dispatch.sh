@@ -378,6 +378,20 @@ wait_for_task_completion() {
             return 1
         fi
         if [ -n "$session_name" ]; then
+            # Some Anthropic-compatible gateways reject a request whose final
+            # message is an assistant/model turn. Claude Code renders this as
+            # a synthetic API error and leaves the pane at the prompt instead
+            # of writing a terminal task result. Detect it here so the worker
+            # can switch to its configured fallback model immediately rather
+            # than waiting for the full stage timeout.
+            local pane_snapshot
+            pane_snapshot=$(tmux -S "$TMUX_SOCKET" capture-pane -p -J -t "${session_name}:0.0" -S -100 2>/dev/null || true)
+            if echo "$pane_snapshot" | grep -Fq "Requests ending with a model turn are not supported"; then
+                WAIT_RESULT="model_provider_compat"
+                echo "❌ Claude API 兼容错误: Requests ending with a model turn are not supported"
+                return 1
+            fi
+
             local pane_command
             pane_command=$(tmux -S "$TMUX_SOCKET" display-message -p -t "${session_name}:0.0" '#{pane_current_command}' 2>/dev/null || true)
             case "$pane_command" in

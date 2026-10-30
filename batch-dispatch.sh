@@ -706,6 +706,13 @@ execute_task() {
         fi
     fi
 
+    # A repair caller may disable recovery without changing the default for other jobs.
+    if [ "${BATCH_AUTO_RECOVERY_LIMIT:-1}" = 0 ]; then
+        checkpoint_stage "$index" "$task_name" failed "$attempt" || return 1
+        echo "❌ ${task_name}: 自动恢复已由调用方禁用，保留失败检查点"
+        return 1
+    fi
+
     failed_task_id="$LAST_TASK_ID"
     mkdir -p "$TMP_DIR" || return 1
     recovery_file=$(mktemp "${TMP_DIR}/recovery-XXXXXX.json") || return 1

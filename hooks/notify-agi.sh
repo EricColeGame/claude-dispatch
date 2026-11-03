@@ -264,6 +264,11 @@ mark_task_uncertain() {
     local tmux_session="$session_name"
     local tmux_socket="/home/ubuntu/clawdbot-tmux-sockets/claude-code.sock"
 
+    if jq -e '.scheduler_failure != null' "$task_file" >/dev/null 2>&1; then
+        log "Ignoring late uncertain callback for scheduler-terminated task: $task_id"
+        return 0
+    fi
+
     ts="$(date -Iseconds)"
 
     if [ -f "$meta_file" ]; then
@@ -299,7 +304,7 @@ mark_task_uncertain() {
 }
 
 # ---- 辅助函数：处理单个任务 ----
-process_task() {
+process_task() (
     local session_name=$1
     local task_id=$2
     local session_dir=$3
@@ -380,6 +385,15 @@ process_task() {
         fi
     fi
 
+    local result_lock_fd
+    exec {result_lock_fd}>"${session_dir}/result.lock" || return 1
+    flock -x "$result_lock_fd" || return 1
+    if ! jq -e --arg task_id "$task_id" \
+        '.task_id == $task_id and .status == "running"' "$meta_file" >/dev/null 2>&1; then
+        log "Ignoring callback for superseded or terminal task: $task_id"
+        return 0
+    fi
+
     # 检测完成状态
     local completion_status=$(check_task_completion "$output")
     if [ "$completion_status" = failed ] && \
@@ -429,6 +443,11 @@ process_task() {
         local done_ts="$(date -Iseconds)"
         local task_file="${RESULT_DIR}/tasks/${task_id}.json"
 
+        if jq -e '.scheduler_failure != null' "$task_file" >/dev/null 2>&1; then
+            log "Ignoring late completion callback for scheduler-terminated task: $task_id"
+            return 0
+        fi
+
         if [ -f "$task_file" ]; then
             jq --arg ts "$done_ts" \
                --arg output "$output" \
@@ -470,6 +489,9 @@ process_task() {
             completed_at="$done_ts"
         fi
     fi
+
+    flock -u "$result_lock_fd"
+    exec {result_lock_fd}>&-
 
     # 只有真正完成才发送通知
     if [ "$write_status" != "done" ]; then
@@ -555,7 +577,7 @@ ${summary:0:800}
 
     log "<<< Task processing completed: $session_name"
     return 0
-}
+)
 
 log "=== Hook fired ==="
 
